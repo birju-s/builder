@@ -1,34 +1,35 @@
-import { prisma } from "@/lib/db";
+"use client";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { useTRPC } from "@/trpc/client";
+import { useMutation } from "@tanstack/react-query";
+import { useRouter } from "next/navigation";
+import { useState } from "react";
+import { toast } from "sonner";
 
-const Page = async () => {
-  const users = await prisma.user.findMany({
-    include: {
-      posts: true,
+const Page =  () => {
+  const router = useRouter();
+  const [value, setValue]= useState("");
+  const trpc = useTRPC();
+  //const {data:messages} = useQuery(trpc.messages.getMany.queryOptions())
+  const createProject = useMutation(trpc.projects.create.mutationOptions({
+    onError: (error) => {
+      toast.error("Failed to create project: " + error.message);
     },
-  });
-
-  return (
-    <div className="flex flex-col items-center justify-center min-h-screen">
-      <h1 className="text-2xl font-bold mb-4">Users</h1>
-      <ul className="space-y-4">
-        {users.map((user) => (
-          <li key={user.id} className="border p-4 rounded-lg w-full max-w-md">
-            <h2 className="text-xl font-semibold">{user.name}</h2>
-            <p>{user.email}</p>
-            <div className="mt-2">
-              {user.posts.map((post) => (
-                <div key={post.id} className="mt-2">
-                  <h3 className="font-medium">{post.title}</h3>
-                  <p>{post.content}</p>
-                </div>
-              ))}
-            </div>
-          </li>
-        ))}
-      </ul>
-      <Button className="mt-6">Add User</Button>
-    </div>
-  );
+    onSuccess: (data) => {
+      router.push(`/projects/${data.id}`)
+    },
+  }));
+    return (
+    
+     <div className="h-screen w-screen flex items-center justify-center">
+      <div className="max-w-7xl mx-auto flex items-center flex-col gap-y-r justify-center">
+      <Input value={value} onChange={(e) => setValue(e.target.value)}/>
+      <Button disabled={createProject.isPending} onClick={() => createProject.mutate({value:value})}> 
+        Submit 
+      </Button>
+     </div>   
+     </div>     
+    );
 }
 export default Page;
