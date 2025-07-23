@@ -3,331 +3,345 @@ import { useState, useEffect } from 'react';
 import { DndProvider } from 'react-dnd';
 import { HTML5Backend } from 'react-dnd-html5-backend';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
-import { 
-  Code, 
-  Eye, 
-  Paintbrush, 
-  Undo, 
-  Redo, 
-  Download, 
-  Upload,
-  Wand2
-} from 'lucide-react';
+import { Eye, Code, Layers, Palette, Save, Undo, Redo } from 'lucide-react';
 
 import { VisualCanvas, VisualElement } from './VisualCanvas';
 import { ComponentPalette } from './ComponentPalette';
 import { PropertyPanel } from './PropertyPanel';
-import { parseCodeToVisualElements, generateCodeFromVisualElements } from './code-parser';
+import { 
+  extractComponentFromFiles, 
+  visualToReactCode, 
+  generateReactComponent 
+} from './CodeToVisualParser';
 
 interface Props {
   projectId: string;
   initialFiles?: Record<string, string>;
-  onCodeUpdate?: (files: Record<string, string>) => void;
-  onRequestAIGeneration?: (prompt: string) => void;
+  onFilesUpdate?: (files: Record<string, string>) => void;
+  onSave?: () => void;
 }
 
-export function VisualEditor({
-  projectId,
-  initialFiles = {},
-  onCodeUpdate,
-  onRequestAIGeneration,
+export function VisualEditor({ 
+  projectId, 
+  initialFiles = {}, 
+  onFilesUpdate,
+  onSave 
 }: Props) {
   const [elements, setElements] = useState<VisualElement[]>([]);
   const [selectedElementId, setSelectedElementId] = useState<string>('');
-  const [activeMode, setActiveMode] = useState<'visual' | 'code'>('visual');
+  const [activeTab, setActiveTab] = useState<'visual' | 'code' | 'layers'>('visual');
   const [history, setHistory] = useState<VisualElement[][]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
-  const [aiPrompt, setAiPrompt] = useState('');
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
 
-  // Initialize elements from code files
+  // Initialize elements from generated files
   useEffect(() => {
     if (Object.keys(initialFiles).length > 0) {
-      // Find the main component file (look for JSX/TSX files)
-      const componentFiles = Object.entries(initialFiles).filter(([path]) =>
-        path.match(/\.(jsx?|tsx?)$/) && !path.includes('index') && !path.includes('app')
-      );
-
-      if (componentFiles.length > 0) {
-        const [, code] = componentFiles[0]; // Use first component file
-        const parsedElements = parseCodeToVisualElements(code);
-        setElements(parsedElements);
-        addToHistory(parsedElements);
-      }
+      const parsedElements = extractComponentFromFiles(initialFiles);
+      setElements(parsedElements);
+      setHistory([parsedElements]);
+      setHistoryIndex(0);
     }
   }, [initialFiles]);
 
+  // Track changes for history
   const addToHistory = (newElements: VisualElement[]) => {
     const newHistory = history.slice(0, historyIndex + 1);
     newHistory.push([...newElements]);
     setHistory(newHistory);
     setHistoryIndex(newHistory.length - 1);
+    setHasUnsavedChanges(true);
   };
 
-  const undo = () => {
-    if (historyIndex > 0) {
-      const previousElements = history[historyIndex - 1];
-      setElements([...previousElements]);
-      setHistoryIndex(historyIndex - 1);
-    }
-  };
-
-  const redo = () => {
-    if (historyIndex < history.length - 1) {
-      const nextElements = history[historyIndex + 1];
-      setElements([...nextElements]);
-      setHistoryIndex(historyIndex + 1);
-    }
-  };
-
-  const updateElement = (elementId: string, updates: Partial<VisualElement>) => {
-    const updateElementRecursive = (elements: VisualElement[]): VisualElement[] => {
-      return elements.map(element => {
-        if (element.id === elementId) {
-          return { ...element, ...updates };
-        }
-        if (element.children) {
-          return {
-            ...element,
-            children: updateElementRecursive(element.children),
-          };
-        }
-        return element;
-      });
-    };
-
-    const newElements = updateElementRecursive(elements);
-    setElements(newElements);
-    addToHistory(newElements);
-
-    // Sync with code
-    syncToCode(newElements);
-  };
-
-  const addElement = (newElement: VisualElement, parentId?: string) => {
-    const addElementRecursive = (elements: VisualElement[]): VisualElement[] => {
-      if (!parentId) {
-        return [...elements, newElement];
-      }
-
-      return elements.map(element => {
-        if (element.id === parentId) {
-          return {
-            ...element,
-            children: [...(element.children || []), newElement],
-          };
-        }
-        if (element.children) {
-          return {
-            ...element,
-            children: addElementRecursive(element.children),
-          };
-        }
-        return element;
-      });
-    };
-
-    const newElements = addElementRecursive(elements);
-    setElements(newElements);
-    addToHistory(newElements);
-    setSelectedElementId(newElement.id);
-
-    // Sync with code
-    syncToCode(newElements);
-  };
-
-  const deleteElement = (elementId: string) => {
-    const deleteElementRecursive = (elements: VisualElement[]): VisualElement[] => {
-      return elements
-        .filter(element => element.id !== elementId)
-        .map(element => ({
-          ...element,
-          children: element.children ? deleteElementRecursive(element.children) : undefined,
-        }));
-    };
-
-    const newElements = deleteElementRecursive(elements);
-    setElements(newElements);
-    addToHistory(newElements);
-    setSelectedElementId('');
-
-    // Sync with code
-    syncToCode(newElements);
-  };
-
-  const duplicateElement = (elementId: string) => {
-    // Find the selected element
-    const selectedElement = findElementById(elements, elementId);
-    if (selectedElement) {
-      const duplicated = {
-        ...selectedElement,
-        id: `duplicate-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+  const handleElementAdd = (element: VisualElement, parentId?: string) => {
+    const newElements = [...elements];
+    
+    if (parentId) {
+      // Add to specific parent (nested)
+      const addToParent = (els: VisualElement[]): VisualElement[] => {
+        return els.map(el => {
+          if (el.id === parentId) {
+            return {
+              ...el,
+              children: [...(el.children || []), element]
+            };
+          } else if (el.children) {
+            return {
+              ...el,
+              children: addToParent(el.children)
+            };
+          }
+          return el;
+        });
       };
-      addElement(duplicated);
+      const updated = addToParent(newElements);
+      setElements(updated);
+      addToHistory(updated);
+    } else {
+      // Add to root
+      const updated = [...newElements, element];
+      setElements(updated);
+      addToHistory(updated);
     }
   };
 
-  const findElementById = (elements: VisualElement[], id: string): VisualElement | null => {
-    for (const element of elements) {
-      if (element.id === id) {
-        return element;
+  const handleElementUpdate = (elementId: string, updates: Partial<VisualElement>) => {
+    const updateElement = (els: VisualElement[]): VisualElement[] => {
+      return els.map(el => {
+        if (el.id === elementId) {
+          return { ...el, ...updates };
+        } else if (el.children) {
+          return {
+            ...el,
+            children: updateElement(el.children)
+          };
+        }
+        return el;
+      });
+    };
+    
+    const updated = updateElement(elements);
+    setElements(updated);
+    addToHistory(updated);
+  };
+
+  const handleElementDelete = (elementId: string) => {
+    const deleteElement = (els: VisualElement[]): VisualElement[] => {
+      return els.filter(el => {
+        if (el.id === elementId) {
+          return false;
+        } else if (el.children) {
+          el.children = deleteElement(el.children);
+        }
+        return true;
+      });
+    };
+    
+    const updated = deleteElement(elements);
+    setElements(updated);
+    addToHistory(updated);
+    setSelectedElementId('');
+  };
+
+  const handleElementDuplicate = (elementId: string) => {
+    const findAndDuplicate = (els: VisualElement[]): VisualElement[] => {
+      const result: VisualElement[] = [];
+      
+      for (const el of els) {
+        result.push(el);
+        
+        if (el.id === elementId) {
+          // Create duplicate with new ID
+          const duplicate: VisualElement = {
+            ...el,
+            id: `${el.id}-copy-${Date.now()}`,
+            children: el.children ? duplicateChildren(el.children) : undefined
+          };
+          result.push(duplicate);
+        } else if (el.children) {
+          el.children = findAndDuplicate(el.children);
+        }
       }
-      if (element.children) {
-        const found = findElementById(element.children, id);
+      
+      return result;
+    };
+    
+    const duplicateChildren = (children: VisualElement[]): VisualElement[] => {
+      return children.map(child => ({
+        ...child,
+        id: `${child.id}-copy-${Date.now()}`,
+        children: child.children ? duplicateChildren(child.children) : undefined
+      }));
+    };
+    
+    const updated = findAndDuplicate(elements);
+    setElements(updated);
+    addToHistory(updated);
+  };
+
+  const handleUndo = () => {
+    if (historyIndex > 0) {
+      setHistoryIndex(historyIndex - 1);
+      setElements(history[historyIndex - 1]);
+    }
+  };
+
+  const handleRedo = () => {
+    if (historyIndex < history.length - 1) {
+      setHistoryIndex(historyIndex + 1);
+      setElements(history[historyIndex + 1]);
+    }
+  };
+
+  const handleSave = async () => {
+    if (elements.length === 0 || !onFilesUpdate) return;
+    
+    // Generate React component code
+    const componentCode = generateReactComponent(elements, 'VisualComponent');
+    
+    // Update files with new component
+    const updatedFiles = {
+      ...initialFiles,
+      'src/components/VisualComponent.tsx': componentCode,
+    };
+    
+    onFilesUpdate(updatedFiles);
+    setHasUnsavedChanges(false);
+    onSave?.();
+  };
+
+  const selectedElement = elements.find(el => el.id === selectedElementId) || 
+    findElementById(elements, selectedElementId);
+
+  function findElementById(els: VisualElement[], id: string): VisualElement | null {
+    for (const el of els) {
+      if (el.id === id) return el;
+      if (el.children) {
+        const found = findElementById(el.children, id);
         if (found) return found;
       }
     }
     return null;
+  }
+
+  const renderLayersTree = (els: VisualElement[], depth = 0): React.ReactNode => {
+    return els.map(el => (
+      <div key={el.id} style={{ marginLeft: depth * 16 }}>
+        <div
+          className={`
+            flex items-center gap-2 p-2 rounded hover:bg-muted cursor-pointer
+            ${el.id === selectedElementId ? 'bg-blue-100 border border-blue-300' : ''}
+          `}
+          onClick={() => setSelectedElementId(el.id)}
+        >
+          <Layers className="h-3 w-3" />
+          <span className="text-sm">{el.type}</span>
+          {el.props.children && typeof el.props.children === 'string' && (
+            <span className="text-xs text-muted-foreground truncate max-w-[100px]">
+              "{el.props.children}"
+            </span>
+          )}
+        </div>
+        {el.children && renderLayersTree(el.children, depth + 1)}
+      </div>
+    ));
   };
-
-  const syncToCode = (elements: VisualElement[]) => {
-    if (onCodeUpdate && elements.length > 0) {
-      const generatedCode = generateCodeFromVisualElements(elements);
-      
-      // Create a basic React component structure
-      const componentCode = `
-import React from 'react';
-
-export default function GeneratedComponent() {
-  return (
-    <div className="min-h-screen">
-${generatedCode.split('\n').map(line => `      ${line}`).join('\n')}
-    </div>
-  );
-}
-`.trim();
-
-      onCodeUpdate({
-        'components/GeneratedComponent.tsx': componentCode,
-      });
-    }
-  };
-
-  const handleAIGeneration = () => {
-    if (aiPrompt.trim() && onRequestAIGeneration) {
-      onRequestAIGeneration(aiPrompt);
-      setAiPrompt('');
-    }
-  };
-
-  const selectedElement = selectedElementId ? findElementById(elements, selectedElementId) : null;
 
   return (
     <DndProvider backend={HTML5Backend}>
       <div className="h-full flex flex-col">
-        {/* Header */}
-        <div className="border-b p-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <h2 className="text-lg font-semibold">Visual Editor</h2>
-              <Tabs value={activeMode} onValueChange={(value) => setActiveMode(value as any)}>
-                <TabsList>
-                  <TabsTrigger value="visual">
-                    <Eye className="h-4 w-4 mr-1" />
-                    Visual
-                  </TabsTrigger>
-                  <TabsTrigger value="code">
-                    <Code className="h-4 w-4 mr-1" />
-                    Code
-                  </TabsTrigger>
-                </TabsList>
-              </Tabs>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={undo}
-                disabled={historyIndex <= 0}
-              >
-                <Undo className="h-4 w-4" />
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={redo}
-                disabled={historyIndex >= history.length - 1}
-              >
-                <Redo className="h-4 w-4" />
-              </Button>
+        {/* Top Toolbar */}
+        <div className="flex items-center justify-between p-3 border-b bg-muted/30">
+          <div className="flex items-center gap-2">
+            <h3 className="font-semibold">Visual Editor</h3>
+            {hasUnsavedChanges && (
               <Badge variant="outline" className="text-xs">
-                {elements.length} elements
+                Unsaved changes
               </Badge>
-            </div>
+            )}
           </div>
-
-          {/* AI Generation Bar */}
-          <div className="flex items-center gap-2 mt-3">
-            <div className="flex-1 flex items-center gap-2 bg-muted/50 rounded-lg px-3 py-2">
-              <Wand2 className="h-4 w-4 text-muted-foreground" />
-              <input
-                type="text"
-                placeholder="Describe what you want to add or change..."
-                value={aiPrompt}
-                onChange={(e) => setAiPrompt(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleAIGeneration()}
-                className="flex-1 bg-transparent border-none outline-none text-sm"
-              />
-            </div>
+          
+          <div className="flex items-center gap-2">
             <Button
               size="sm"
-              onClick={handleAIGeneration}
-              disabled={!aiPrompt.trim()}
+              variant="outline"
+              onClick={handleUndo}
+              disabled={historyIndex <= 0}
             >
-              Generate
+              <Undo className="h-3 w-3" />
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={handleRedo}
+              disabled={historyIndex >= history.length - 1}
+            >
+              <Redo className="h-3 w-3" />
+            </Button>
+            <Button
+              size="sm"
+              onClick={handleSave}
+              disabled={!hasUnsavedChanges}
+            >
+              <Save className="h-3 w-3 mr-1" />
+              Save
             </Button>
           </div>
         </div>
 
         {/* Main Content */}
         <div className="flex-1 flex overflow-hidden">
-          {activeMode === 'visual' ? (
-            <>
-              {/* Component Palette */}
-              <div className="w-64 border-r">
-                <ComponentPalette />
-              </div>
+          {/* Left Sidebar - Component Palette */}
+          <div className="w-64 border-r bg-muted/20 overflow-auto">
+            <ComponentPalette />
+          </div>
 
-              {/* Canvas */}
-              <div className="flex-1 flex flex-col">
+          {/* Center - Canvas/Code View */}
+          <div className="flex-1 flex flex-col">
+            <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as any)}>
+              <TabsList className="w-full justify-start border-b rounded-none">
+                <TabsTrigger value="visual" className="flex items-center gap-2">
+                  <Eye className="h-4 w-4" />
+                  Visual
+                </TabsTrigger>
+                <TabsTrigger value="code" className="flex items-center gap-2">
+                  <Code className="h-4 w-4" />
+                  Code
+                </TabsTrigger>
+                <TabsTrigger value="layers" className="flex items-center gap-2">
+                  <Layers className="h-4 w-4" />
+                  Layers
+                </TabsTrigger>
+              </TabsList>
+
+              <TabsContent value="visual" className="flex-1 p-4">
                 <VisualCanvas
                   elements={elements}
                   selectedElementId={selectedElementId}
                   onElementSelect={setSelectedElementId}
-                  onElementUpdate={updateElement}
-                  onElementAdd={addElement}
-                  onElementDelete={deleteElement}
+                  onElementUpdate={handleElementUpdate}
+                  onElementAdd={handleElementAdd}
+                  onElementDelete={handleElementDelete}
                 />
-              </div>
+              </TabsContent>
 
-              {/* Property Panel */}
-              <div className="w-80 border-l">
-                <PropertyPanel
-                  selectedElement={selectedElement}
-                  onElementUpdate={updateElement}
-                  onElementDelete={deleteElement}
-                  onElementDuplicate={duplicateElement}
-                />
-              </div>
-            </>
-          ) : (
-            // Code View
-            <div className="flex-1 p-4">
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-sm">Generated Code</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <pre className="text-sm bg-muted p-4 rounded-lg overflow-auto">
-                    <code>{generateCodeFromVisualElements(elements)}</code>
+              <TabsContent value="code" className="flex-1 p-4">
+                <div className="h-full bg-muted/20 rounded-lg p-4 font-mono text-sm overflow-auto">
+                  <pre className="whitespace-pre-wrap">
+                    {elements.length > 0 
+                      ? generateReactComponent(elements, 'VisualComponent')
+                      : '// No elements to display\n// Add components from the palette or use AI generation'
+                    }
                   </pre>
-                </CardContent>
-              </Card>
-            </div>
-          )}
+                </div>
+              </TabsContent>
+
+              <TabsContent value="layers" className="flex-1 p-4">
+                <div className="space-y-1">
+                  {elements.length === 0 ? (
+                    <div className="text-center text-muted-foreground py-8">
+                      <Layers className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                      <p className="text-sm">No elements to display</p>
+                    </div>
+                  ) : (
+                    renderLayersTree(elements)
+                  )}
+                </div>
+              </TabsContent>
+            </Tabs>
+          </div>
+
+          {/* Right Sidebar - Properties */}
+          <div className="w-80 border-l bg-muted/20 overflow-auto">
+            <PropertyPanel
+              selectedElement={selectedElement}
+              onElementUpdate={handleElementUpdate}
+              onElementDelete={handleElementDelete}
+              onElementDuplicate={handleElementDuplicate}
+            />
+          </div>
         </div>
       </div>
     </DndProvider>
