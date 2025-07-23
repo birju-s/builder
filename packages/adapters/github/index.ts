@@ -85,3 +85,62 @@ export class GitHubAdapter {
     });
   }
 }
+
+/**
+ * Utility: extract `{ owner, repo }` from any GitHub URL formats:
+ *  - https://github.com/owner/repo
+ *  - git@github.com:owner/repo.git
+ *  - https://github.com/owner/repo.git
+ */
+function parseRepoUrl(repoUrl: string): { owner: string; repo: string } {
+  // Remove trailing ".git"
+  const sanitized = repoUrl.replace(/\.git$/, "");
+
+  // SSH style: git@github.com:owner/repo
+  const sshMatch = sanitized.match(/github\\.com[:/](?<owner>[^/]+)\\/(?<repo>[^/]+)$/);
+  if (sshMatch?.groups) {
+    return { owner: sshMatch.groups.owner, repo: sshMatch.groups.repo };
+  }
+
+  // HTTPS style: https://github.com/owner/repo
+  try {
+    const url = new URL(sanitized);
+    const [owner, repo] = url.pathname.replace(/^\\//, "").split("/");
+    if (owner && repo) return { owner, repo };
+  } catch {
+    /* fall through */
+  }
+
+  throw new Error(`Unable to parse owner/repo from URL: ${repoUrl}`);
+}
+
+export interface PushFilesParams {
+  repoUrl: string;
+  branch: string;
+  files: Record<string, string>;
+  commitMessage: string;
+  accessToken: string;
+}
+
+/**
+ * Convenience wrapper so callers can simply provide a repo URL and token.
+ *
+ * Example:
+ *   await pushFiles({
+ *     repoUrl: "https://github.com/acme/my-app",
+ *     branch: "main",
+ *     files: { "README.md": "# Hello" },
+ *     commitMessage: "chore: auto-sync",
+ *     accessToken
+ *   })
+ */
+export async function pushFiles(params: PushFilesParams) {
+  const { repoUrl, accessToken, ...rest } = params;
+  const { owner, repo } = parseRepoUrl(repoUrl);
+
+  const gh = new GitHubAdapter({ accessToken });
+  await gh.pushFiles({ owner, repo, ...rest });
+}
+
+// Re-export for backwards compatibility with earlier imports
+export { parseRepoUrl };

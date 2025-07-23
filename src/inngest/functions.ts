@@ -8,6 +8,8 @@ import { getSandbox, lastAssistantTextMessageContent } from "./utils";
 import { getPrompt, GenerationStepType } from "@/prompts";
 // Import rolling summary utility
 import { updateRollingSummary } from "packages/core/summary/rollingSummary";
+// GitHub adapter for auto-push
+import { pushFiles } from "packages/adapters/github";
 
 // Prisma client (already imported below but moved up for clarity)
 import { prisma } from '@/lib/db';
@@ -37,7 +39,7 @@ export const codeAgentFunction = inngest.createFunction(
       // Load the project row to retrieve the existing rolling-summary digest
       const project = await prisma.project.findUnique({
         where: { id: event.data.projectId },
-        select: { id: true, digest: true, manifest: true },
+        select: { id: true, digest: true, manifest: true, repoUrl: true },
       });
 
       const digest = project?.digest ?? "";
@@ -221,6 +223,23 @@ export const codeAgentFunction = inngest.createFunction(
           console.error("Failed to update rolling summary:", error);
         }
       });
+
+      // Push updated files to GitHub if the project is linked to a repository
+      if (project?.repoUrl) {
+        await step.run("push-to-github", async () => {
+          try {
+            await pushFiles({
+              repoUrl: project.repoUrl!,
+              branch: "main",
+              files: result.state.data.files,
+              commitMessage: "chore(builder): auto-sync generated files",
+            });
+            console.log("Pushed updated files to GitHub for project:", event.data.projectId);
+          } catch (err) {
+            console.error("GitHub push failed:", err);
+          }
+        });
+      }
     }
 
     await step.run("save-result", async () => {
