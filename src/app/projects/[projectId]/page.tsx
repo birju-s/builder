@@ -2,6 +2,7 @@ import { ProojectView } from "@/modules/projects/server/ui/project-view";
 import { getQueryClient, trpc } from "@/trpc/server";
 import { dehydrate, HydrationBoundary } from "@tanstack/react-query";
 import { Suspense } from "react";
+import PublishButton from "./PublishButton";
 
 interface Props{
     params: Promise<{
@@ -24,6 +25,8 @@ const Page = async ({params}: Props) => {
             <Suspense fallback={<p>Loading Project...</p>}>
 
             <ProojectView projectId={projectId} />
+            {/* Publish button to trigger deployment */}
+            <PublishButton projectId={projectId} />
 
             </Suspense>
         </HydrationBoundary>
