@@ -38,6 +38,25 @@ model Message {
   fragment Fragment?
 }
 
+/// -----------------------------------------------------------------
+///  ConversationTurn:
+///  Stores each turn in an iterative conversation so the AI can build
+///  context across follow-up requests (“Make the header blue”, etc.)
+/// -----------------------------------------------------------------
+model ConversationTurn {
+  id        String      @id @default(uuid())
+
+  projectId String
+  project   Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  role      MessageRole /// USER or ASSISTANT
+  content   String
+
+  createdAt DateTime    @default(now())
+
+  @@index([projectId, createdAt])
+}
+
 model Fragment {
   id        String  @id @default(uuid())
   messageId String  @unique
