@@ -170,14 +170,21 @@ function DraggableComponent({ component }: DraggableComponentProps) {
 
 interface Props {
   className?: string;
+  /**
+   * Components provided by installed integrations (e.g., Clerk, Stripe).
+   * These are injected by the parent based on the project's integration
+   * registry so the palette stays fully dynamic.
+   */
+  integrationComponents?: ComponentType[];
 }
 
-export function ComponentPalette({ className }: Props) {
+export function ComponentPalette({ className, integrationComponents = [] }: Props) {
   const categories = {
     basic: COMPONENT_TYPES.filter(c => c.category === 'basic'),
     layout: COMPONENT_TYPES.filter(c => c.category === 'layout'),
     form: COMPONENT_TYPES.filter(c => c.category === 'form'),
     navigation: COMPONENT_TYPES.filter(c => c.category === 'navigation'),
+    integrations: integrationComponents,
   };
 
   return (
@@ -197,6 +204,18 @@ export function ComponentPalette({ className }: Props) {
           </div>
         </div>
 
+        {categories.integrations.length > 0 && (
+          <div>
+            <h4 className="text-xs font-medium text-muted-foreground mb-2 uppercase tracking-wide">
+              Integrations
+            </h4>
+            <div className="grid grid-cols-1 gap-2">
+              {categories.integrations.map((component) => (
+                <DraggableComponent key={component.id} component={component} />
+              ))}
+            </div>
+          </div>
+        )}
         <div>
           <h4 className="text-xs font-medium text-muted-foreground mb-2 uppercase tracking-wide">
             Layout
