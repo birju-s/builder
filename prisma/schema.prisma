@@ -59,19 +59,36 @@ model Project {
 
   messages Message[]
 
-  // Rolling-summary storage
-  manifest Json?
-  digest   String?
+  // Deployment preferences
+  deployMode DeployMode @default(CPANEL)
 }
 
-/// Stores encrypted OAuth / PAT credentials for Git, cPanel, etc.
+/// -----------------------------------------------------------------
+///  Deployment mode enum – switches between direct cPanel and WHMCS
+/// -----------------------------------------------------------------
+enum DeployMode {
+  CPANEL
+  WHMCS
+}
+
+/// -----------------------------------------------------------------
+///  Stores encrypted credentials (GitHub PAT, cPanel token, etc.)
+///  Each user can have at most one credential per provider.
+/// -----------------------------------------------------------------
 model GitCredential {
   id        String   @id @default(uuid())
 
-  userId    String   /// Owner of the credential (Clerk or internal user id)
-  provider  String   /// e.g. "github", "gitlab", "cpanel"
-  encrypted Bytes    /// Encrypted token / secret
+  /// Reference to the owner (Clerk userId or internal id)
+  userId    String
+
+  /// Provider key, e.g. "github", "cpanel"
+  provider  String
+
+  /// Encrypted token / secret (symmetric-encrypted blob)
+  encrypted Bytes
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@unique([userId, provider])
 }
