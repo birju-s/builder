@@ -4,7 +4,12 @@ import { Sandbox } from "@e2b/code-interpreter"
 
 import { inngest } from "@/inngest/client";
 import { getSandbox, lastAssistantTextMessageContent } from "./utils";
-import { PROMPT } from '@/prompt';
+// Use the new modular prompt system
+import { getPrompt, GenerationStepType } from "@/prompts";
+// Import rolling summary utility
+import { updateRollingSummary } from "packages/core/summary/rollingSummary";
+
+// Prisma client (already imported below but moved up for clarity)
 import { prisma } from '@/lib/db';
 
 interface AgentState{
@@ -21,10 +26,27 @@ export const codeAgentFunction = inngest.createFunction(
           return sandbox.sandboxId;
         });
 
+      /*
+       * Determine which generation step we are running.  The orchestrator
+       * should eventually pass this via `event.data.stepType`, but we default
+       * to `"frontend"` to stay backward-compatible with existing events.
+       */
+      const stepType: GenerationStepType =
+        (event.data?.stepType as GenerationStepType) ?? "frontend";
+
+      // Load the project row to retrieve the existing rolling-summary digest
+      const project = await prisma.project.findUnique({
+        where: { id: event.data.projectId },
+        select: { id: true, digest: true, manifest: true },
+      });
+
+      const digest = project?.digest ?? "";
+
       const codeAgent = createAgent<AgentState>({
       name: "code-agent",
       description:"An expert coding agent",
-      system: PROMPT,
+      // Inject the rolling summary digest into the prompt
+      system: getPrompt(stepType, digest),
       model: openai({ 
         model: "gpt-4.1", 
         defaultParameters:{
@@ -172,6 +194,35 @@ export const codeAgentFunction = inngest.createFunction(
       return `https://${host}`;
     });
 
+    // Update rolling summary based on the generated files
+    if (!isError && result.state.data.files) {
+      await step.run("update-rolling-summary", async () => {
+        try {
+          // Get existing manifest or create empty one
+          const existingManifest = project?.manifest ? project.manifest : {};
+          
+          // Update the manifest and generate a new digest
+          const { manifest, digest } = updateRollingSummary(
+            existingManifest,
+            result.state.data.files
+          );
+          
+          // Save the updated manifest and digest to the project
+          await prisma.project.update({
+            where: { id: event.data.projectId },
+            data: {
+              manifest,
+              digest
+            }
+          });
+          
+          console.log("Updated rolling summary for project:", event.data.projectId);
+        } catch (error) {
+          console.error("Failed to update rolling summary:", error);
+        }
+      });
+    }
+
     await step.run("save-result", async () => {
       if(isError){
         return prisma.message.create({
@@ -202,7 +253,7 @@ export const codeAgentFunction = inngest.createFunction(
     });
     return { 
       url: sandboxUrl,
-      title: "Frangment",
+      title: "Fragment",
       files: result.state.data.files,
       summary: result.state.data.summary,
     };
