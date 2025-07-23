@@ -12,6 +12,8 @@ import { updateRollingSummary } from "packages/core/summary/rollingSummary";
 import { pushFiles } from "packages/adapters/github";
 // Import conversation context utilities
 import { getConversationHistory, buildIterativePrompt, saveConversationTurn } from "@/lib/conversation";
+// Code quality analysis
+import { analyzeCode, autoFixIssues } from "@/lib/code-analysis";
 
 // Prisma client (already imported below but moved up for clarity)
 import { prisma } from '@/lib/db';
@@ -253,6 +255,25 @@ export const codeAgentFunction = inngest.createFunction(
           console.error("Failed to update rolling summary:", error);
         }
       });
+
+      /**
+       * ─────────────────────────────────────────────────────────────
+       * Code-analysis & optional auto-fix
+       * We run analysis once files are present, auto-fix simple
+       * issues (e.g., console.log removal, missing alt text) and
+       * persist the analysis for later display.
+       * ─────────────────────────────────────────────────────────────
+       */
+      const { analysis, fixedFiles } = await step.run("code-analysis", async () => {
+        const analysis = await analyzeCode(result.state.data.files);
+        const fixedFiles = autoFixIssues(result.state.data.files, analysis.issues);
+        return { analysis, fixedFiles };
+      });
+
+      // Replace files in state with auto-fixed version so Git push & fragment store correct code
+      result.state.data.files = fixedFiles;
+      // attach analysis for later persistence
+      (result.state.data as any).analysis = analysis;
 
       // Push updated files to GitHub if the project is linked to a repository
       if (project?.repoUrl) {
