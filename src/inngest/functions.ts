@@ -10,6 +10,8 @@ import { getPrompt, GenerationStepType } from "@/prompts";
 import { updateRollingSummary } from "packages/core/summary/rollingSummary";
 // GitHub adapter for auto-push
 import { pushFiles } from "packages/adapters/github";
+// Import conversation context utilities
+import { getConversationHistory, buildIterativePrompt, saveConversationTurn } from "@/lib/conversation";
 
 // Prisma client (already imported below but moved up for clarity)
 import { prisma } from '@/lib/db';
@@ -42,13 +44,41 @@ export const codeAgentFunction = inngest.createFunction(
         select: { id: true, digest: true, manifest: true, repoUrl: true },
       });
 
-      const digest = project?.digest ?? "";
+      if (!project) {
+        throw new Error(`Project not found: ${event.data.projectId}`);
+      }
+
+      const digest = project.digest ?? "";
+      
+      // Determine if this is a follow-up request or initial generation
+      const isFollowUp = event.data.isFollowUp === true;
+      
+      // Get system prompt based on conversation context
+      const systemPrompt = await step.run("prepare-prompt", async () => {
+        if (isFollowUp) {
+          // For follow-up requests, build an iterative prompt with conversation history
+          const conversationHistory = await getConversationHistory(event.data.projectId);
+          return buildIterativePrompt(conversationHistory, digest, event.data.value);
+        } else {
+          // For initial requests, use the standard prompt
+          return getPrompt(stepType, digest);
+        }
+      });
+
+      // Save the user's request as a conversation turn
+      await step.run("save-user-turn", async () => {
+        await saveConversationTurn({
+          projectId: event.data.projectId,
+          role: "USER",
+          content: event.data.value
+        });
+      });
 
       const codeAgent = createAgent<AgentState>({
       name: "code-agent",
       description:"An expert coding agent",
-      // Inject the rolling summary digest into the prompt
-      system: getPrompt(stepType, digest),
+      // Use the context-aware system prompt
+      system: systemPrompt,
       model: openai({ 
         model: "gpt-4.1", 
         defaultParameters:{
@@ -241,6 +271,17 @@ export const codeAgentFunction = inngest.createFunction(
         });
       }
     }
+
+    // Save the assistant's response as a conversation turn
+    await step.run("save-assistant-turn", async () => {
+      if (!isError && result.state.data.summary) {
+        await saveConversationTurn({
+          projectId: event.data.projectId,
+          role: "ASSISTANT",
+          content: result.state.data.summary
+        });
+      }
+    });
 
     await step.run("save-result", async () => {
       if(isError){
