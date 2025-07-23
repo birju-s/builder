@@ -92,3 +92,43 @@ model GitCredential {
 
   @@unique([userId, provider])
 }
+
+/// -----------------------------------------------------------------
+///  Analytics: every significant action (build, deploy, preview, etc.)
+///  `amount` can represent seconds, bytes, or “1” for count-based events.
+/// -----------------------------------------------------------------
+model Analytics {
+  id        String   @id @default(uuid())
+
+  userId    String
+  projectId String?
+
+  action    String   /// e.g. "build", "deploy", "sandbox-min"
+  amount    Int      /// numeric value attached to the action
+
+  createdAt DateTime @default(now())
+
+  /// Optional relations for convenience
+  project   Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+/// -----------------------------------------------------------------
+///  UsageQuota: tracks remaining allowance for each user per period.
+///  Counters can be reset by a scheduled job (e.g. monthly).
+/// -----------------------------------------------------------------
+model UsageQuota {
+  id              String   @id @default(uuid())
+
+  userId          String   @unique
+
+  monthlyBuildCap Int      @default(100)   /// maximum builds allowed per month
+  buildsUsed      Int      @default(0)
+
+  storageCapMB    Int      @default(1024)  /// total artefact storage allowed
+  storageUsedMB   Int      @default(0)
+
+  resetAt         DateTime                 /// when counters will reset
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
