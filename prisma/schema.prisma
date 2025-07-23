@@ -58,4 +58,20 @@ model Project {
   updatedAt DateTime @updatedAt
 
   messages Message[]
+
+  // Rolling-summary storage
+  manifest Json?
+  digest   String?
+}
+
+/// Stores encrypted OAuth / PAT credentials for Git, cPanel, etc.
+model GitCredential {
+  id        String   @id @default(uuid())
+
+  userId    String   /// Owner of the credential (Clerk or internal user id)
+  provider  String   /// e.g. "github", "gitlab", "cpanel"
+  encrypted Bytes    /// Encrypted token / secret
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
