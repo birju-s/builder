@@ -49,6 +49,20 @@ export async function getConversationContext(projectId: string): Promise<Convers
 }
 
 /**
+ * -----------------------------------------------------------------
+ * Public helpers expected by other modules (e.g. Inngest functions)
+ * These are thin wrappers around the internal helpers above so that
+ * we don’t break existing code while satisfying new import names.
+ * -----------------------------------------------------------------
+ */
+
+/**
+ * Alias for backwards-compatibility.
+ * `functions.ts` imports getConversationHistory(...) so we expose it.
+ */
+export const getConversationHistory = getConversationContext;
+
+/**
  * Add a turn to the conversation history
  */
 export async function addConversationTurn(
@@ -66,13 +80,35 @@ export async function addConversationTurn(
 }
 
 /**
+ * Wrapper that matches the expected name in other modules.
+ */
+export interface SaveConversationTurnInput {
+  projectId: string;
+  role: MessageRole;
+  content: string;
+}
+
+/**
+ * saveConversationTurn
+ * Accepts a single object (to align with calls elsewhere) and stores the turn
+ * in the database via addConversationTurn.
+ */
+export function saveConversationTurn({
+  projectId,
+  role,
+  content,
+}: SaveConversationTurnInput) {
+  return addConversationTurn(projectId, role, content);
+}
+/**
  * Generate context-aware prompt that includes conversation history
  */
-export function buildIterativePrompt(
+function buildIterativePromptInternal(
   context: ConversationContext,
-  newUserRequest: string,
-  basePrompt: string
+  basePrompt: string,
+  newUserRequest: string
 ): string {
+  // Build a readable conversation history string
   const conversationHistory = context.turns
     .map(turn => `${turn.role}: ${turn.content}`)
     .join('\n');
@@ -101,6 +137,18 @@ IMPORTANT INSTRUCTIONS FOR ITERATIVE CHANGES:
 5. If modifying existing files, maintain the same structure and imports unless changes are needed.
 
 Continue the conversation by implementing the user's request while maintaining project continuity.`;
+}
+
+/**
+ * Re-ordered parameter signature expected by `functions.ts`
+ * (history, basePrompt, newUserRequest)
+ */
+export function buildIterativePrompt(
+  history: ConversationContext,
+  basePrompt: string,
+  newUserRequest: string
+): string {
+  return buildIterativePromptInternal(history, basePrompt, newUserRequest);
 }
 
 /**
