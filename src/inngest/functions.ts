@@ -4,16 +4,9 @@ import { Sandbox } from "@e2b/code-interpreter"
 
 import { inngest } from "@/inngest/client";
 import { getSandbox, lastAssistantTextMessageContent } from "./utils";
-// Use the new modular prompt system
-import { getPrompt, GenerationStepType } from "@/prompts";
-// Import rolling summary utility
-import { updateRollingSummary } from "packages/core/summary/rollingSummary";
-// GitHub adapter for auto-push
-import { pushFiles } from "packages/adapters/github";
+import { PROMPT } from '@/prompt';
 // Import conversation context utilities
 import { getConversationHistory, buildIterativePrompt, saveConversationTurn } from "@/lib/conversation";
-// Code quality analysis
-import { analyzeCode, autoFixIssues } from "@/lib/code-analysis";
 
 // Prisma client (already imported below but moved up for clarity)
 import { prisma } from '@/lib/db';
@@ -32,49 +25,41 @@ export const codeAgentFunction = inngest.createFunction(
           return sandbox.sandboxId;
         });
 
-      /*
-       * Determine which generation step we are running.  The orchestrator
-       * should eventually pass this via `event.data.stepType`, but we default
-       * to `"frontend"` to stay backward-compatible with existing events.
-       */
-      const stepType: GenerationStepType =
-        (event.data?.stepType as GenerationStepType) ?? "frontend";
-
-      // Load the project row to retrieve the existing rolling-summary digest
-      const project = await prisma.project.findUnique({
-        where: { id: event.data.projectId },
-        select: { id: true, digest: true, manifest: true, repoUrl: true },
-      });
-
-      if (!project) {
-        throw new Error(`Project not found: ${event.data.projectId}`);
-      }
-
-      const digest = project.digest ?? "";
-      
-      // Determine if this is a follow-up request or initial generation
-      const isFollowUp = event.data.isFollowUp === true;
-      
-      // Get system prompt based on conversation context
-      const systemPrompt = await step.run("prepare-prompt", async () => {
-        if (isFollowUp) {
-          // For follow-up requests, build an iterative prompt with conversation history
-          const conversationHistory = await getConversationHistory(event.data.projectId);
-          return buildIterativePrompt(conversationHistory, digest, event.data.value);
-        } else {
-          // For initial requests, use the standard prompt
-          return getPrompt(stepType, digest);
-        }
-      });
-
-      // Save the user's request as a conversation turn
-      await step.run("save-user-turn", async () => {
-        await saveConversationTurn({
-          projectId: event.data.projectId,
-          role: "USER",
-          content: event.data.value
+        // Get project information for context
+        const project = await prisma.project.findUnique({
+          where: { id: event.data.projectId },
+          select: { id: true, digest: true, manifest: true, repoUrl: true },
         });
-      });
+
+        if (!project) {
+          throw new Error(`Project not found: ${event.data.projectId}`);
+        }
+
+        const digest = project.digest ?? "";
+        
+        // Determine if this is a follow-up request or initial generation
+        const isFollowUp = event.data.isFollowUp === true;
+        
+        // Get system prompt based on conversation context
+        const systemPrompt = await step.run("prepare-prompt", async () => {
+          if (isFollowUp) {
+            // For follow-up requests, build an iterative prompt with conversation history
+            const conversationHistory = await getConversationHistory(event.data.projectId);
+            return buildIterativePrompt(conversationHistory, digest, event.data.value);
+          } else {
+            // For initial requests, use the standard prompt
+            return PROMPT;
+          }
+        });
+
+        // Save the user's request as a conversation turn
+        await step.run("save-user-turn", async () => {
+          await saveConversationTurn({
+            projectId: event.data.projectId,
+            role: "USER",
+            content: event.data.value
+          });
+        });
 
       const codeAgent = createAgent<AgentState>({
       name: "code-agent",
@@ -228,71 +213,6 @@ export const codeAgentFunction = inngest.createFunction(
       return `https://${host}`;
     });
 
-    // Update rolling summary based on the generated files
-    if (!isError && result.state.data.files) {
-      await step.run("update-rolling-summary", async () => {
-        try {
-          // Get existing manifest or create empty one
-          const existingManifest = project?.manifest ? project.manifest : {};
-          
-          // Update the manifest and generate a new digest
-          const { manifest, digest } = updateRollingSummary(
-            existingManifest,
-            result.state.data.files
-          );
-          
-          // Save the updated manifest and digest to the project
-          await prisma.project.update({
-            where: { id: event.data.projectId },
-            data: {
-              manifest,
-              digest
-            }
-          });
-          
-          console.log("Updated rolling summary for project:", event.data.projectId);
-        } catch (error) {
-          console.error("Failed to update rolling summary:", error);
-        }
-      });
-
-      /**
-       * ─────────────────────────────────────────────────────────────
-       * Code-analysis & optional auto-fix
-       * We run analysis once files are present, auto-fix simple
-       * issues (e.g., console.log removal, missing alt text) and
-       * persist the analysis for later display.
-       * ─────────────────────────────────────────────────────────────
-       */
-      const { analysis, fixedFiles } = await step.run("code-analysis", async () => {
-        const analysis = await analyzeCode(result.state.data.files);
-        const fixedFiles = autoFixIssues(result.state.data.files, analysis.issues);
-        return { analysis, fixedFiles };
-      });
-
-      // Replace files in state with auto-fixed version so Git push & fragment store correct code
-      result.state.data.files = fixedFiles;
-      // attach analysis for later persistence
-      (result.state.data as any).analysis = analysis;
-
-      // Push updated files to GitHub if the project is linked to a repository
-      if (project?.repoUrl) {
-        await step.run("push-to-github", async () => {
-          try {
-            await pushFiles({
-              repoUrl: project.repoUrl!,
-              branch: "main",
-              files: result.state.data.files,
-              commitMessage: "chore(builder): auto-sync generated files",
-            });
-            console.log("Pushed updated files to GitHub for project:", event.data.projectId);
-          } catch (err) {
-            console.error("GitHub push failed:", err);
-          }
-        });
-      }
-    }
-
     // Save the assistant's response as a conversation turn
     await step.run("save-assistant-turn", async () => {
       if (!isError && result.state.data.summary) {
@@ -334,7 +254,7 @@ export const codeAgentFunction = inngest.createFunction(
     });
     return { 
       url: sandboxUrl,
-      title: "Fragment",
+      title: "Frangment",
       files: result.state.data.files,
       summary: result.state.data.summary,
     };
